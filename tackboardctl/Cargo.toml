@@ -12,3 +12,5 @@ tokio-util = {  version = "0.7.15", features = ["codec"] }
 futures = "0.3.31"
 tokio-serde = { version = "0.9.0", features = ["bincode", "json", "serde_json"] }
 log = "0.4.27"
+tackboardlib = {  path = "../tackboardlib" }
+uuid = { version = "1", features = ["v4"] }  # v4 = random UUIDs

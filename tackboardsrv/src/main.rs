@@ -27,38 +27,42 @@ async fn main() {
     // connected clients tracker
     let mut connected_clients: Arc<Mutex<Vec<String>>> = Arc::new(Mutex::new(Vec::new()));
     
-
-    tokio::spawn(async move {
-        // Process jobs
-        loop {
-
-        }
-    });
-
     loop {
         let connected_clients = connected_clients.clone();
-        let _ = connection_manager.accept_connection(move |x, framed| {
+        let _ = connection_manager.accept_connection(move |x, mut framed| {
             let connected_clients = connected_clients.clone();
             async move {
                 match x {
-                    ClientRequest::ConnectionRequest { id, client_url } => {
-
+                    ClientRequest::ConnectionRequest { id, client_url, .. } => {
                         debug!("Client connection request: {:?}", id);
-                        connected_clients.lock().await.push(id);
+                        connected_clients.lock().await.push(client_url.clone());
                         let topic_keys: Vec<String> = TOPICS
                             .lock()
                             .await
                             .keys()
                             .cloned()
                             .collect();
+                        debug!("Wrote back to the client {}", client_url);
+                        debug!("Number of connected clients {}", connected_clients.lock().await.len());
                         let response = ServerResponse::ConnectionResponse {
                             topics: topic_keys,
                         };
+                        framed.send(response).await.unwrap();
+                        framed
                     }
-                    ClientRequest::TopicListenRequest { .. } => {}
-                    ClientRequest::PublishRequest { .. } => {}
+                    ClientRequest::TopicListenRequest { topic_id, client_url } => {
+                        debug!("Client {} requested to listen to topic {}", client_url, topic_id);
+                        // handle topic listen request here
+                        framed
+                    }
+                    ClientRequest::PublishRequest { .. } => {
+                        debug!("Received publish request");
+                        // handle publish request here
+                        framed
+                    }
                 }
-            }}).await;
+            }
+        }).await;
 
     }
 }
