@@ -13,3 +13,4 @@ futures = "0.3.31"
 tokio-serde = { version = "0.9.0", features = ["bincode", "json", "serde_json"] }
 log = "0.4.27"
 tackboardlib = {  path = "../tackboardlib" }
+once_cell = "1.21.3"
