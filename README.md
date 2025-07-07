@@ -1,6 +1,34 @@
 # Tackboard
 
+![Homework Score](https://img.shields.io/badge/homework-10%2F10-brightgreen)
+
+> **Note:** The code in this repository was written by me as part of a self-learning exercise. The task was defined and the final implementation evaluated using generative AI (OpenAI’s ChatGPT). The project was used to improve my understanding of async networking, ownership, and message-passing in Rust.
+
+
+
 📝 **Homework Assignment: “Tackboard” – A Minimal Async Pub/Sub System**
+
+## 🧠 Homework Evaluation
+
+| Criteria                                      | Rating     |
+|----------------------------------------------|------------|
+| Async TCP Server/Client using Tokio           | ✅ Excellent use of `tokio`, `tokio_util`, and `tokio_serde` |
+| Framed message serialization/deserialization  | ✅ Well-structured with clear separation between client/server |
+| Ownership, Borrowing, Locking                 | ✅ Shows strong grasp; recent improvements removed contention |
+| Handling subscriptions and topic storage      | ✅ Correct and scalable |
+| Lock contention avoidance                     | ✅ Significantly improved by cloning before `.await` |
+| Correct use of `Arc<Mutex<...>>`              | ✅ Used appropriately across shared state |
+| Clean ClientRequest / ServerResponse Enums    | ✅ Nicely designed and extensible |
+| CLI Client experience                         | ✅ `clap`-based design is clean and effective |
+| Logging and diagnostics                       | ✅ Logging is detailed and context-aware |
+| Code structure and readability                | ✅ Modular and maintainable |
+| Bonus: Publish broadcast and topic history    | ✅ Implemented well |
+| Bonus: Connection deduplication               | ✅ Clients are not re-registered if already connected |
+
+**✅ Final Score: 10/10 — Excellent work!**  
+Your implementation shows strong understanding of async concurrency, framing, message routing, and Rust’s ownership model. Clear structure, correct locking patterns, and thoughtful logging elevate this beyond a minimal pub/sub system.
+
+---
 
 ## 🧠 Goal
 Build a minimal in-memory publish/subscribe system over TCP where multiple clients can:

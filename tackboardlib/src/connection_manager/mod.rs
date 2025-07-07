@@ -182,7 +182,11 @@ impl Connects for ConnectionManager {
                                 let response =
                                     ServerResponse::ConnectionResponse { topics: topic_keys };
                                 // get the sink out of the hashmap
-                                if let Some(sink) = connected_clients.lock().await.get(&id) {
+                                let maybe_sink = {
+                                    let clients = connected_clients.lock().await;
+                                    clients.get(&id).cloned()
+                                };
+                                if let Some(sink) = maybe_sink {
                                     let mut sink = sink.lock().await;
                                     sink.send(ServerResponse::Ack).await.unwrap();
                                 }
@@ -203,9 +207,12 @@ impl Connects for ConnectionManager {
                         }
                         ClientRequest::TopicListenRequest { id, topic_id } => {
 
-                            // look up the client in connected_clients
-                            let mut clients = connected_clients.lock().await;
-                            if let Some(sink) = clients.get_mut(&id) {
+                          
+                            let maybe_sink = {
+                                let clients = connected_clients.lock().await;
+                                clients.get(&id).cloned()
+                            };
+                            if let Some(sink) = maybe_sink {
                                 let mut sink = sink.lock().await;
                                 debug!("Client {} requested to listen to topic {}", id, topic_id);
 
@@ -259,6 +266,13 @@ impl Connects for ConnectionManager {
                                 }
                             } else {
                                 error!("No clients are listening to topic {}", topic_id);
+                            }
+                            // ack 
+                            if let Some(sink) = connected_clients.lock().await.get(&id) {
+                                let mut sink = sink.lock().await;
+                                sink.send(ServerResponse::Ack).await.unwrap();
+                            } else {
+                                error!("Client with id {} is not connected", id);
                             }
                         }
                     }

@@ -19,9 +19,9 @@ struct Args {
 }
 #[tokio::main]
 async fn main() {
-    
+
     let args = Args::parse();
-    
+
     env_logger::builder()
         .filter(None, log::LevelFilter::Debug)
         .init();
@@ -37,7 +37,7 @@ async fn main() {
         client_url: client_path.clone(), // in reality this would be different
         server_url: server_path.clone(),
     };
-    
+
     let mut server_topics = None;
 
     let server_response = connect_manager.send(request).await.unwrap();
@@ -50,43 +50,34 @@ async fn main() {
         ServerResponse::Error { .. } => {}
     }
     // Connected at this point --------------------------------------------------------------------
-    
+
     if args.generate_messages.unwrap_or(false) {
         let mut count = 0;
+        let random_messages = vec![
+            "Hello, world!",
+            "This is a test message.",
+            "Tackboard is awesome!",
+            "How are you doing today?",
+            "Let's send some more messages.",
+        ];
         loop {
             let topic_request = ClientRequest::PublishRequest {
                 id: client_id.clone(),
                 topic_id: "topic-1".to_string(),
-                message: format!("Message number {}", count),
+                message: random_messages[count % random_messages.len()].to_string(),
             };
-            connect_manager
-                .topic_sync(topic_request, |x| async move {
-                    match x {
-                        ServerResponse::ConnectionResponse { .. } => {}
-                        ServerResponse::TopicListenUpdate { topic_id, messages } => {
-                            println!("{:?}", messages)
-                        }
-                        ServerResponse::Ack => {
-                            debug!("Acknowledged publish request for topic");
-                        }
-                        ServerResponse::Error { reason } => {
-                            error!("{}", reason)
-                        }
-                    }
-                })
-                .await;
+            connect_manager.send(topic_request).await.unwrap();
             count += 1;
-            sleep(Duration::from_secs(1)).await;
         }
     }
-    
+
     if let Some(server_topics) = server_topics {
         debug!(
             "Connected to server at {} with topics: {:?}",
             server_path, server_topics
         );
         let topic_id = "topic-1".to_string();
-        
+
 
         loop {
             let topic_request = ClientRequest::TopicListenRequest {
