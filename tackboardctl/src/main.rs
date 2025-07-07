@@ -85,7 +85,7 @@ async fn main() {
                 id: client_id.clone(),
             };
             connect_manager
-                .topic_sync(topic_request, |x| async move {
+                .send_with_callback(topic_request, |x| async move {
                     match x {
                         ServerResponse::ConnectionResponse { .. } => {}
                         ServerResponse::TopicListenUpdate { topic_id, messages } => {

@@ -1,9 +1,10 @@
 use crate::types::errors::TackboardError;
 use crate::types::{ClientRequest, ServerResponse, Topic};
 use futures::prelude::*;
-use futures::stream::SplitSink;
+use futures::stream::{SplitSink, SplitStream};
 use log::{debug, error};
 use std::collections::HashMap;
+use std::io::Split;
 use std::sync::Arc;
 use tokio::net::{TcpListener, TcpStream};
 use tokio::sync::Mutex;
@@ -15,13 +16,17 @@ pub trait Connects {
     async fn send(&self, request: ClientRequest) -> Result<ServerResponse, TackboardError>;
 
     // This is a blocking function that will take updates from the server topics subscribed to
-    async fn topic_sync<F, Fut>(&self, request: ClientRequest, callback: F)
+    async fn send_with_callback<F, Fut>(&self, request: ClientRequest, callback: F)
     where
         F: Fn(ServerResponse) -> Fut + Send + 'static,
         Fut: Future<Output = ()> + Send + 'static;
 
     // Server side
-    async fn accept_connections(&mut self) -> Result<(), TackboardError>;
+    async fn accept_connections<F, Fut>(&mut self, callback: F) -> Result<(), TackboardError>
+    where
+        F: Fn(Arc<Mutex<SplitSink<InConnection, ServerResponse>>>,Arc<Mutex<SplitStream<InConnection>>>) -> Fut + Send + 'static,
+        Fut: Future<Output = ()> + Send + 'static;
+
 }
 
 pub type OutConnection = tokio_serde::Framed<
@@ -55,11 +60,11 @@ pub fn create_outgoing_connection(
 }
 
 type SinkMap = Arc<Mutex<HashMap<String, Arc<Mutex<SplitSink<InConnection, ServerResponse>>>>>>;
-#[derive(Default)]
+#[derive(Default, Clone)]
 pub struct ConnectionManager {
     path: String,
     // Server specific
-    listener: Option<TcpListener>,
+    listener: Arc<Mutex<Option<TcpListener>>>,
     // A list of topic-id and their messages
     topics: Arc<Mutex<HashMap<Topic, Vec<String>>>>,
     // A list of topics and their associated clientIds ( stored in connected_clients )
@@ -90,7 +95,7 @@ impl ConnectionManager {
     ) -> Result<ConnectionManager, TackboardError> {
         let listener = TcpListener::bind(&path).await.map_err(TackboardError::Io)?;
 
-        let mut topic_association: Arc<Mutex<HashMap<String,Vec<String>>>> = Arc::new(Mutex::new(HashMap::new()));
+        let topic_association: Arc<Mutex<HashMap<String,Vec<String>>>> = Arc::new(Mutex::new(HashMap::new()));
         for topic in topics.lock().await.keys() {
             debug!("Setting up topic: {}", topic);
             topic_association
@@ -102,11 +107,22 @@ impl ConnectionManager {
         Ok(ConnectionManager {
             path,
             connected_clients: Arc::new(Mutex::new(HashMap::new())),
-            listener: Some(listener),
+            listener: Arc::new(Mutex::new(Some(listener))),
             topics,
             topic_client_association: topic_association,
             durable_client_connection: None,
         })
+    }
+    pub async fn get_connected_clients(&self) -> Arc<Mutex<HashMap<String, Arc<Mutex<SplitSink<InConnection, ServerResponse>>>>>> {
+        self.connected_clients.clone()
+    }
+
+    pub async fn get_topics(&self) -> Arc<Mutex<HashMap<Topic, Vec<String>>>> {
+        self.topics.clone()
+    }
+
+    pub async fn get_topic_association(&self) -> Arc<Mutex<HashMap<Topic, Vec<String>>>> {
+        self.topic_client_association.clone()
     }
 }
 
@@ -125,7 +141,7 @@ impl Connects for ConnectionManager {
         Err(TackboardError::InvalidRequest)
     }
 
-    async fn topic_sync<F, Fut>(&self, request: ClientRequest, callback: F)
+    async fn send_with_callback<F, Fut>(&self, request: ClientRequest, callback: F)
     where
         F: Fn(ServerResponse) -> Fut + Send + 'static,
         Fut: Future<Output = ()> + Send + 'static,
@@ -153,131 +169,30 @@ impl Connects for ConnectionManager {
             }
         });
     }
-    async fn accept_connections(&mut self) -> Result<(), TackboardError> {
-        let (socket, _) = self.listener.as_mut().unwrap().accept().await?;
+    async fn accept_connections<F, Fut>(&mut self, callback: F) -> Result<(), TackboardError>
+    where
+        F: Fn(Arc<Mutex<SplitSink<InConnection, ServerResponse>>>,
+        Arc<Mutex<SplitStream<InConnection>>>) -> Fut + Send + 'static,
+        Fut: Future<Output = ()> + Send + 'static {
+        let (socket, _) = self.listener
+            .lock()
+            .await
+            .as_mut()
+            .ok_or(TackboardError::InvalidRequest)?
+            .accept()
+            .await
+            .map_err(TackboardError::Io)?;
 
-        tokio::spawn({
-            let connected_clients = self.connected_clients.clone();
-            let topics = self.topics.clone();
-            let topic_client_association = self.topic_client_association.clone();
-            async move {
-                let length_delimited = Framed::new(socket, LengthDelimitedCodec::new());
-                let framed: InConnection = create_incoming_connection(length_delimited);
+        tokio::spawn(async move {
+            let length_delimited = Framed::new(socket,
+                                               LengthDelimitedCodec::new());
+            let framed: InConnection = create_incoming_connection(length_delimited);
+            let (sink, stream) =
+                framed.split();
+            let sink = Arc::new(Mutex::new(sink));
+            let stream = Arc::new(Mutex::new(stream));
 
-                let (sink, mut stream) = framed.split();
-                let sink = Arc::new(Mutex::new(sink));
-                // Topic variables
-                let topic_client_association = topic_client_association.clone();
-
-                while let Some(Ok(message)) = stream.next().await {
-                    match message {
-                        ClientRequest::ConnectionRequest { id, .. } => {
-                            // check if client is already connected to connected_clients
-                            let mut clients = connected_clients.lock().await;
-                            if clients.contains_key(&id) {
-                                error!("Client with id {} is already connected", id);
-                                // resend the topics
-                                let topic_keys: Vec<String> =
-                                    topics.lock().await.keys().cloned().collect();
-                                let response =
-                                    ServerResponse::ConnectionResponse { topics: topic_keys };
-                                // get the sink out of the hashmap
-                                let maybe_sink = {
-                                    let clients = connected_clients.lock().await;
-                                    clients.get(&id).cloned()
-                                };
-                                if let Some(sink) = maybe_sink {
-                                    let mut sink = sink.lock().await;
-                                    sink.send(ServerResponse::Ack).await.unwrap();
-                                }
-                                continue;
-                            } else {
-                                debug!("Client connection request: {:?}", id);
-                                // Add the client to connected_clients
-                                clients.insert(id.clone(), sink.clone());
-                                debug!("Client connection created: {:?}", id);
-                                // Send back the connection response with available topics
-                                let topic_keys: Vec<String> =
-                                    topics.lock().await.keys().cloned().collect();
-                                let response =
-                                    ServerResponse::ConnectionResponse { topics: topic_keys };
-                                let sender = clients.get_mut(&id).unwrap();
-                                sender.lock().await.send(response).await.unwrap();
-                            }
-                        }
-                        ClientRequest::TopicListenRequest { id, topic_id } => {
-
-                          
-                            let maybe_sink = {
-                                let clients = connected_clients.lock().await;
-                                clients.get(&id).cloned()
-                            };
-                            if let Some(sink) = maybe_sink {
-                                let mut sink = sink.lock().await;
-                                debug!("Client {} requested to listen to topic {}", id, topic_id);
-
-                                // Check if the topic exists
-                                let mut topics = topics.lock().await;
-                                if let Some(messages) = topics.get_mut(&topic_id) {
-                                    // If the topic exists, send an ACK
-                                    debug!("Topic {} exists, sending ACK to client {}", topic_id, id);
-                                    sink.send(ServerResponse::Ack).await.unwrap();
-
-                                    // Optionally, you can send existing messages for the topic
-                                    if !messages.is_empty() {
-                                        sink.send(ServerResponse::TopicListenUpdate {
-                                            topic_id: topic_id.clone(),
-                                            messages: messages.clone(),
-                                        }).await.unwrap();
-                                    }
-                                    // Add the client to the topic-client association
-                                    let mut topic_clients = topic_client_association.lock().await;
-                                    topic_clients
-                                        .entry(topic_id.clone())
-                                        .or_default()
-                                        .push(id.clone());
-                                } else {
-                                    // If the topic does not exist, send an error response
-                                    sink.send(ServerResponse::Error { reason: "Topic not found".to_string() }).await.unwrap();
-                                }
-                            } else {
-                                error!("Client with id {} is not connected", id);
-                            }
-
-                        }
-                        ClientRequest::PublishRequest { message, id, topic_id } => {
-                            
-                            let mut topics = topics.lock().await;
-                            topics.get_mut(&topic_id).unwrap().push(message.clone());
-                            debug!("Published message to topic {}: {}", topic_id, message);
-                            // Notify all clients listening to this topic
-                            let topic_clients = topic_client_association.lock().await;
-                            if let Some(clients) = topic_clients.get(&topic_id) {
-                                for client_id in clients {
-                                    if let Some(sink) = connected_clients.lock().await.get(client_id) {
-                                        let mut sink = sink.lock().await;
-                                        sink.send(ServerResponse::TopicListenUpdate {
-                                            topic_id: topic_id.clone(),
-                                            messages: vec![message.clone()],
-                                        }).await.unwrap();
-                                    } else {
-                                        error!("Client with id {} is not connected", client_id);
-                                    }
-                                }
-                            } else {
-                                error!("No clients are listening to topic {}", topic_id);
-                            }
-                            // ack 
-                            if let Some(sink) = connected_clients.lock().await.get(&id) {
-                                let mut sink = sink.lock().await;
-                                sink.send(ServerResponse::Ack).await.unwrap();
-                            } else {
-                                error!("Client with id {} is not connected", id);
-                            }
-                        }
-                    }
-                }
-            }
+            callback(sink, stream).await;
         });
         Ok(())
     }
