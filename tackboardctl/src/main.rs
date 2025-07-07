@@ -1,16 +1,10 @@
+use clap::Parser;
 use futures::SinkExt;
 use log::{debug, error};
-use std::time::Duration;
-use tackboardlib::connection_manager::{
-    ConnectionManager, Connects, OutConnection, create_outgoing_connection,
-};
+use tackboardlib::connection_manager::{ConnectionManager, Connects};
 use tackboardlib::types::ClientRequest::ConnectionRequest;
 use tackboardlib::types::*;
-use tokio::net::TcpStream;
-use tokio::time::sleep;
-use tokio_util::codec::{Framed, LengthDelimitedCodec};
 use uuid::Uuid;
-use clap::Parser;
 
 #[derive(Parser)]
 struct Args {
@@ -19,7 +13,6 @@ struct Args {
 }
 #[tokio::main]
 async fn main() {
-
     let args = Args::parse();
 
     env_logger::builder()
@@ -53,7 +46,7 @@ async fn main() {
 
     if args.generate_messages.unwrap_or(false) {
         let mut count = 0;
-        let random_messages = vec![
+        let random_messages = [
             "Hello, world!",
             "This is a test message.",
             "Tackboard is awesome!",
@@ -72,12 +65,8 @@ async fn main() {
     }
 
     if let Some(server_topics) = server_topics {
-        debug!(
-            "Connected to server at {} with topics: {:?}",
-            server_path, server_topics
-        );
+        debug!("Connected to server at {server_path} with topics: {server_topics:?}");
         let topic_id = "topic-1".to_string();
-
 
         loop {
             let topic_request = ClientRequest::TopicListenRequest {
@@ -89,13 +78,13 @@ async fn main() {
                     match x {
                         ServerResponse::ConnectionResponse { .. } => {}
                         ServerResponse::TopicListenUpdate { topic_id, messages } => {
-                            println!("{:?}", messages)
+                            println!("{messages:?}")
                         }
                         ServerResponse::Ack => {
                             debug!("Acknowledged topic listen request for topic");
                         }
                         ServerResponse::Error { reason } => {
-                            error!("{}", reason)
+                            error!("{reason}")
                         }
                     }
                 })

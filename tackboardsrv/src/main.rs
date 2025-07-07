@@ -1,18 +1,16 @@
-use futures::stream::SplitSink;
 use futures::{SinkExt, StreamExt};
 use log::{debug, error};
 use once_cell::sync::Lazy;
 use std::collections::HashMap;
-use std::hash::Hash;
 use std::sync::Arc;
-use tackboardlib::connection_manager::{ConnectionManager, Connects, InConnection};
+use tackboardlib::connection_manager::{ConnectionManager, Connects};
 use tackboardlib::types::*;
-use tokio::sync::{Mutex, mpsc};
+use tokio::sync::Mutex;
 
 static TOPICS: Lazy<Arc<Mutex<HashMap<String, Vec<String>>>>> = Lazy::new(|| {
     let mut map = HashMap::new();
     for id in 0..5 {
-        let topic = format!("topic-{}", id);
+        let topic = format!("topic-{id}");
         map.insert(topic, vec![]); // No clients yet
     }
     Arc::new(Mutex::new(map))
@@ -51,7 +49,7 @@ async fn main() {
                                 // check if client is already connected to connected_clients
                                 let mut clients = connected_clients.lock().await;
                                 if clients.contains_key(&id) {
-                                    error!("Client with id {} is already connected", id);
+                                    error!("Client with id {id} is already connected");
                                     // resend the topics
                                     let topic_keys: Vec<String> =
                                         topics.lock().await.keys().cloned().collect();
@@ -68,10 +66,10 @@ async fn main() {
                                     }
                                     continue;
                                 } else {
-                                    debug!("Client connection request: {:?}", id);
+                                    debug!("Client connection request: {id:?}");
                                     // Add the client to connected_clients
                                     clients.insert(id.clone(), sink.clone());
-                                    debug!("Client connection created: {:?}", id);
+                                    debug!("Client connection created: {id:?}");
                                     // Send back the connection response with available topics
                                     let topic_keys: Vec<String> =
                                         topics.lock().await.keys().cloned().collect();
@@ -88,13 +86,13 @@ async fn main() {
                                 };
                                 if let Some(sink) = maybe_sink {
                                     let mut sink = sink.lock().await;
-                                    debug!("Client {} requested to listen to topic {}", id, topic_id);
+                                    debug!("Client {id} requested to listen to topic {topic_id}");
 
                                     // Check if the topic exists
                                     let mut topics = topics.lock().await;
                                     if let Some(messages) = topics.get_mut(&topic_id) {
                                         // If the topic exists, send an ACK
-                                        debug!("Topic {} exists, sending ACK to client {}", topic_id, id);
+                                        debug!("Topic {topic_id} exists, sending ACK to client {id}");
                                         sink.send(ServerResponse::Ack).await.unwrap();
 
                                         // Optionally, you can send existing messages for the topic
@@ -115,13 +113,13 @@ async fn main() {
                                         sink.send(ServerResponse::Error { reason: "Topic not found".to_string() }).await.unwrap();
                                     }
                                 } else {
-                                    error!("Client with id {} is not connected", id);
+                                    error!("Client with id {id} is not connected");
                                 }
                             }
                             ClientRequest::PublishRequest { message, id, topic_id } => {
                                 let mut topics = topics.lock().await;
                                 topics.get_mut(&topic_id).unwrap().push(message.clone());
-                                debug!("Published message to topic {}: {}", topic_id, message);
+                                debug!("Published message to topic {topic_id}: {message}");
                                 // Notify all clients listening to this topic
                                 let topic_clients = topic_client_association.lock().await;
                                 if let Some(clients) = topic_clients.get(&topic_id) {
@@ -133,18 +131,18 @@ async fn main() {
                                                 messages: vec![message.clone()],
                                             }).await.unwrap();
                                         } else {
-                                            error!("Client with id {} is not connected", client_id);
+                                            error!("Client with id {client_id} is not connected");
                                         }
                                     }
                                 } else {
-                                    error!("No clients are listening to topic {}", topic_id);
+                                    error!("No clients are listening to topic {topic_id}");
                                 }
                                 // ack
                                 if let Some(sink) = connected_clients.lock().await.get(&id) {
                                     let mut sink = sink.lock().await;
                                     sink.send(ServerResponse::Ack).await.unwrap();
                                 } else {
-                                    error!("Client with id {} is not connected", id);
+                                    error!("Client with id {id} is not connected");
                                 }
                             }
                         }
@@ -152,6 +150,5 @@ async fn main() {
                 }
             }
         }).await;
-
     }
 }

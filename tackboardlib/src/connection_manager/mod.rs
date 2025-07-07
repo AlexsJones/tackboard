@@ -4,13 +4,12 @@ use futures::prelude::*;
 use futures::stream::{SplitSink, SplitStream};
 use log::{debug, error};
 use std::collections::HashMap;
-use std::io::Split;
 use std::sync::Arc;
 use tokio::net::{TcpListener, TcpStream};
 use tokio::sync::Mutex;
 use tokio_serde::formats::*;
+use tokio_util::codec::Framed;
 use tokio_util::codec::LengthDelimitedCodec;
-use tokio_util::codec::{Framed, length_delimited};
 pub trait Connects {
     //Client side
     async fn send(&self, request: ClientRequest) -> Result<ServerResponse, TackboardError>;
@@ -24,9 +23,13 @@ pub trait Connects {
     // Server side
     async fn accept_connections<F, Fut>(&mut self, callback: F) -> Result<(), TackboardError>
     where
-        F: Fn(Arc<Mutex<SplitSink<InConnection, ServerResponse>>>,Arc<Mutex<SplitStream<InConnection>>>) -> Fut + Send + 'static,
+        F: Fn(
+                Arc<Mutex<SplitSink<InConnection, ServerResponse>>>,
+                Arc<Mutex<SplitStream<InConnection>>>,
+            ) -> Fut
+            + Send
+            + 'static,
         Fut: Future<Output = ()> + Send + 'static;
-
 }
 
 pub type OutConnection = tokio_serde::Framed<
@@ -95,13 +98,11 @@ impl ConnectionManager {
     ) -> Result<ConnectionManager, TackboardError> {
         let listener = TcpListener::bind(&path).await.map_err(TackboardError::Io)?;
 
-        let topic_association: Arc<Mutex<HashMap<String,Vec<String>>>> = Arc::new(Mutex::new(HashMap::new()));
+        let topic_association: Arc<Mutex<HashMap<String, Vec<String>>>> =
+            Arc::new(Mutex::new(HashMap::new()));
         for topic in topics.lock().await.keys() {
-            debug!("Setting up topic: {}", topic);
-            topic_association
-                .lock()
-                .await
-                .insert(topic.clone(), vec![]);
+            debug!("Setting up topic: {topic}");
+            topic_association.lock().await.insert(topic.clone(), vec![]);
         }
 
         Ok(ConnectionManager {
@@ -113,7 +114,9 @@ impl ConnectionManager {
             durable_client_connection: None,
         })
     }
-    pub async fn get_connected_clients(&self) -> Arc<Mutex<HashMap<String, Arc<Mutex<SplitSink<InConnection, ServerResponse>>>>>> {
+    pub async fn get_connected_clients(
+        &self,
+    ) -> Arc<Mutex<HashMap<String, Arc<Mutex<SplitSink<InConnection, ServerResponse>>>>>> {
         self.connected_clients.clone()
     }
 
@@ -152,7 +155,7 @@ impl Connects for ConnectionManager {
             let mut framed = framed.lock().await;
 
             if let Err(e) = framed.send(request).await {
-                error!("Failed to send topic listen request: {}", e);
+                error!("Failed to send topic listen request: {e}");
                 return;
             }
 
@@ -162,7 +165,7 @@ impl Connects for ConnectionManager {
                         callback(response).await;
                     }
                     Err(e) => {
-                        error!("Error receiving response: {}", e);
+                        error!("Error receiving response: {e}");
                         break;
                     }
                 }
@@ -171,10 +174,16 @@ impl Connects for ConnectionManager {
     }
     async fn accept_connections<F, Fut>(&mut self, callback: F) -> Result<(), TackboardError>
     where
-        F: Fn(Arc<Mutex<SplitSink<InConnection, ServerResponse>>>,
-        Arc<Mutex<SplitStream<InConnection>>>) -> Fut + Send + 'static,
-        Fut: Future<Output = ()> + Send + 'static {
-        let (socket, _) = self.listener
+        F: Fn(
+                Arc<Mutex<SplitSink<InConnection, ServerResponse>>>,
+                Arc<Mutex<SplitStream<InConnection>>>,
+            ) -> Fut
+            + Send
+            + 'static,
+        Fut: Future<Output = ()> + Send + 'static,
+    {
+        let (socket, _) = self
+            .listener
             .lock()
             .await
             .as_mut()
@@ -184,11 +193,9 @@ impl Connects for ConnectionManager {
             .map_err(TackboardError::Io)?;
 
         tokio::spawn(async move {
-            let length_delimited = Framed::new(socket,
-                                               LengthDelimitedCodec::new());
+            let length_delimited = Framed::new(socket, LengthDelimitedCodec::new());
             let framed: InConnection = create_incoming_connection(length_delimited);
-            let (sink, stream) =
-                framed.split();
+            let (sink, stream) = framed.split();
             let sink = Arc::new(Mutex::new(sink));
             let stream = Arc::new(Mutex::new(stream));
 
