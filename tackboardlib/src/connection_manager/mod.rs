@@ -15,9 +15,10 @@ pub trait Connects {
     async fn send(&self, request: ClientRequest) -> Result<ServerResponse, TackboardError>;
 
     // This is a blocking function that will take updates from the server topics subscribed to
-    async fn topic_sync<F, Fut>(&self, callback: F) where
-        F: Fn(ServerResponse) -> Fut,
-        Fut: Future<Output=()> + Send + 'static;
+    async fn topic_sync<F, Fut>(&self, request: ClientRequest, callback: F)
+    where
+        F: Fn(ServerResponse) -> Fut + Send + 'static,
+        Fut: Future<Output = ()> + Send + 'static;
 
     // Server side
     async fn accept_connection<F, Fut>(&mut self,callback: F) -> Result<(), TackboardError>
@@ -95,27 +96,34 @@ impl Connects for ConnectionManager {
         Err(TackboardError::InvalidRequest)
     }
 
-    async fn topic_sync<F, Fut>(&self, callback: F) where
-        F: Fn(ServerResponse) -> Fut,
-        Fut: Future<Output=()> + Send + 'static {
-        let length_delimited = Framed::new(TcpStream::connect(&self.path).await.unwrap(),
-                                           LengthDelimitedCodec::new());
-        let mut framed: OutConnection = create_outgoing_connection(length_delimited);
+    async fn topic_sync<F, Fut>(&self, request: ClientRequest, callback: F)
+    where
+        F: Fn(ServerResponse) -> Fut + Send + 'static,
+        Fut: Future<Output = ()> + Send + 'static,
+    {
+        let framed = self.client_connection.as_ref().unwrap().clone();
+        // Spawn a new task to handle topic updates
+        tokio::spawn(async move {
+            let mut framed = framed.lock().await;
 
-        while let Some(result) = framed.next().await {
-            match result {
-                Ok(response) => {
-                    callback(response).await;
-                }
-                Err(e) => {
-                    panic!("{}", e)
+            if let Err(e) = framed.send(request).await {
+                error!("Failed to send topic listen request: {}", e);
+                return;
+            }
+
+            while let Some(result) = framed.next().await {
+                match result {
+                    Ok(response) => {
+                        callback(response).await;
+                    }
+                    Err(e) => {
+                        error!("Error receiving response: {}", e);
+                        break;
+                    }
                 }
             }
-        }
-
-
+        });
     }
-
     async fn accept_connection<F, Fut>(&mut self, callback: F) -> Result<(), TackboardError>
     where
         F: Fn(ClientRequest, InConnection) -> Fut + Send + 'static,
