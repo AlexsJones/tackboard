@@ -33,7 +33,7 @@ async fn main() {
 
     let mut server_topics = None;
 
-    let server_response = connect_manager.send(request).await.unwrap();
+    let server_response = connect_manager.send_sync(request).await.unwrap();
     match server_response {
         ServerResponse::ConnectionResponse { topics } => {
             server_topics = Some(topics);
@@ -59,7 +59,7 @@ async fn main() {
                 topic_id: "topic-1".to_string(),
                 message: random_messages[count % random_messages.len()].to_string(),
             };
-            connect_manager.send(topic_request).await.unwrap();
+            connect_manager.send_sync(topic_request).await.unwrap();
             count += 1;
         }
     }
@@ -74,7 +74,7 @@ async fn main() {
                 id: client_id.clone(),
             };
             connect_manager
-                .send_with_callback(topic_request, |x| async move {
+                .send_async(topic_request, |x| async move {
                     match x {
                         ServerResponse::ConnectionResponse { .. } => {}
                         ServerResponse::TopicListenUpdate { topic_id, messages } => {

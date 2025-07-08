@@ -22,14 +22,17 @@ async fn main() {
 
     //  Start some random topics
     let topics = TOPICS.clone();
+    let topic_client_association:Arc<Mutex<HashMap<Topic, Vec<String>>>> = Arc::new(Mutex::new(HashMap::new()));
+    for t in topics.lock().await.keys() {
+        topic_client_association.lock().await.insert(t.clone(), Vec::new());
+    }
     let mut connection_manager =
-        ConnectionManager::create_listener("127.0.0.1:5621".to_string(), topics)
+        ConnectionManager::create_listener("127.0.0.1:5621".to_string())
             .await
             .unwrap();
 
     let connected_clients = connection_manager.get_connected_clients().await;
-    let topic_client_association = connection_manager.get_topic_association().await;
-    let topics = connection_manager.get_topics().await;
+    let topics:Arc<Mutex<HashMap<Topic, Vec<String>>>> = TOPICS.clone();
 
     loop {
         let result = connection_manager.accept_connections({
